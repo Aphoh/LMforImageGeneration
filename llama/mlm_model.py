@@ -93,6 +93,8 @@ class ModelArgs:
     max_batch_size: int = 32
     max_seq_len: int = 2048
 
+    model_type: str = 'c2i'
+
 
 #################################################################################
 #                      Embedding Layers for Class Labels                        #
@@ -338,19 +340,11 @@ class Transformer(nn.Module):
         
         # output layer
         self.norm = RMSNorm(config.dim, eps=config.norm_eps)
-        if self.token_each > 1:
-            self.output = torch.nn.ModuleList()
-            for i in range(self.token_each):
-                self.output.append(nn.Linear(config.dim, self.vocab_size, bias=False))
-        else:
-            self.output = nn.Linear(config.dim, self.vocab_size, bias=False)
-        
         self.mlm_layer = MlmLayer(feat_emb_dim=config.dim, word_emb_dim=config.dim, vocab_size=self.vocab_size)
         if self.smoothing > 0.0:
             self.criterion = LabelSmoothingCrossEntropy(smoothing=self.smoothing)
         else:
             self.criterion = nn.CrossEntropyLoss(reduction='none')
-        # self.output.weight = self.tok_embedder.weight
 
         # rotary pos embedding
         grid_size = int(self.block_size ** 0.5)
@@ -374,13 +368,6 @@ class Transformer(nn.Module):
         # Initialize nn.Linear and nn.Embedding
         self.apply(self._init_weights)
 
-        # Zero-out output layers:
-        if self.token_each > 1:
-            for output in self.output:
-                nn.init.constant_(output.weight, 0)
-        else:
-            nn.init.constant_(self.output.weight, 0)
-            
         if self.pos_type =='sincos':
             if self.cls_row:
                 pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], self.row_num, self.row_num+1)

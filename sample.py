@@ -21,8 +21,6 @@ from PIL import Image
 import torchvision.transforms as transforms
 
 from einops import rearrange, reduce, pack, unpack
-# from llama.generate import generate
-import cv2
 
 
 def find_model(model_name):
