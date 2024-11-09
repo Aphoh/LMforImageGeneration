@@ -124,7 +124,7 @@ def main(args, args_ae):
         ffn_dropout_p=dropout_p,
         drop_path_rate=args.drop_path_rate,
         token_dropout_p=args.token_dropout_p,
-    ).to(device, dtype=torch.bfloat16)
+    ).to(device)
     print("finish model builiding")
     
     binaryae = BinaryAutoEncoder(args_ae).to(device)
@@ -144,6 +144,8 @@ def main(args, args_ae):
     checkpoint = torch.load(ckpt_path, map_location=lambda storage, loc: storage)
     
     model.load_state_dict(checkpoint)
+    model = model.to(torch.bfloat16)
+    print("Model dtype:", model.state_dict().values().__iter__().__next__().dtype)
         
 
     # Create folder to save samples:
