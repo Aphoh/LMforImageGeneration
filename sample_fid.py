@@ -45,7 +45,7 @@ def create_npz_from_sample_folder(sample_dir, num=50_000):
     print(f"Saved .npz file to {npz_path} [shape={samples.shape}].")
     return npz_path
 
-def sample_func_autoregressive(model, bae, args, class_labels, seed=0, image_size=256):
+def sample_func_autoregressive(model, bae, args, class_labels, seed=0, image_size=256, cd_alpha=0.1, cd_beta=0.0):
     # Setup PyTorch:
     torch.manual_seed(seed)
     torch.set_grad_enabled(False)
@@ -64,7 +64,7 @@ def sample_func_autoregressive(model, bae, args, class_labels, seed=0, image_siz
     # Setup classifier-free guidance:
     model.forward = torch.compile(model.forward, mode='max-autotune', fullgraph=True)
     indices, logits = model.generate_cfg(idx=None, cond=y, num_iter=args.gen_iter_num, remask=args.remask, cfg_schedule=args.cfg_schedule,
-                    temperature=args.temperature, top_k=args.top_k, cfg_scale=args.cfg_scale) # bs, 16*16, 4
+                    temperature=args.temperature, top_k=args.top_k, cfg_scale=args.cfg_scale, cd_alpha=cd_alpha, cd_beta=cd_beta) # bs, 16*16, 4
     
     device = indices.device
     all_codes = torch.arange(int(2 ** args.code_dim))  #tensor([    0,     1,     2,  ..., 65533, 65534, 65535])
@@ -150,7 +150,7 @@ def main(args, args_ae):
 
     # Create folder to save samples:
     model_string_name = args.ckpt.split('/')[-1].split('.')[0]
-    folder_name = f"{model_string_name}-{args.cfg_schedule}cfg-{args.cfg_scale}-t{args.temperature}-g{args.gen_iter_num}-top{args.top_k}"
+    folder_name = f"{model_string_name}-{args.cfg_schedule}cfg-{args.cfg_scale}-t{args.temperature}-g{args.gen_iter_num}-beta{args.cd_beta}-al{args.cd_alpha}-top{args.top_k}"
     
     if not args.deterministic:
         folder_name += '-nd'
@@ -198,7 +198,7 @@ def main(args, args_ae):
         bs = y.shape[0]
         # Setup classifier-free guidance:
         with torch.no_grad():
-            samples = sample_func_autoregressive(model, binaryae, args, y, seed + iter_loc * dist.get_world_size())
+            samples = sample_func_autoregressive(model, binaryae, args, y, seed + iter_loc * dist.get_world_size(), cd_alpha=args.cd_alpha, cd_beta=args.cd_beta)
             # print('y:', y, 'sample:', samples.shape)
         
         for i, sample in enumerate(samples):
@@ -253,6 +253,9 @@ if __name__ == "__main__":
     parser.add_argument("--postnorm", action="store_true")
     parser.add_argument("--norm_type", type=str, default="RMS")
     parser.add_argument("--extra_info", type=str, default='')
+
+    parser.add_argument("--cd_beta", type=float, default=0.0)
+    parser.add_argument("--cd_alpha", type=float, default=0.1)
     
     args_ae = get_vqgan_hparams(parser)
     args = parser.parse_args()
