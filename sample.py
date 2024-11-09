@@ -10,17 +10,20 @@ Sample new images from a pre-trained DiT.
 import torch
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-from torchvision.utils import save_image
+from torchvision.utils import save_image, make_grid
 import argparse
 import os
 from glob import glob
 from hparams import get_vqgan_hparams
 from bae.binaryae import BinaryGAN, BinaryAutoEncoder, load_pretrain
 import numpy as np
+import torchvision.transforms.functional as F
 from PIL import Image
 import torchvision.transforms as transforms
 
 from einops import rearrange, reduce, pack, unpack
+
+import wandb
 
 
 def find_model(model_name):
@@ -84,8 +87,9 @@ def sample_func_autoregressive(model, bae, save, args, seed=0, image_size=256, n
     # samples = vae.decode(samples / 0.18215).sample
     
     # Save and display images:
-    save_image(samples, save, nrow=4, normalize=True, value_range=(0, 1))
-    
+    img = make_grid(samples, nrow=8, normalize=True, value_range=(0, 1), padding=0)
+    wandb.log({'images': wandb.Image(img), 'step':seed})
+
     del model, bae
 
 def blending(x, sample, blend_width=128, v_expand=False):
@@ -118,6 +122,8 @@ def main(args, args_ae):
 
     assert args.ckpt
     
+    wandb.init(project='mlm-cfg', config=vars(args))
+
     #### GPT model ####
     if args.drop_path_rate > 0.0:
         dropout_p = 0.0
@@ -357,7 +363,7 @@ def main(args, args_ae):
             sample_func_autoregressive(
                 model, binaryae, save_path, args,
                 seed=args.seed+cur_num, image_size=args.image_size, num_classes=args.num_classes)
-
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--modeling", type=str, default="mlm", choices=['mlm', 'ar'])
@@ -412,8 +418,6 @@ if __name__ == "__main__":
 
     parser.add_argument("--cd_beta", type=float, default=0.0)
     parser.add_argument("--cd_alpha", type=float, default=0.1)
-    
-    
     
     args_ae = get_vqgan_hparams(parser)
     args = parser.parse_args()
