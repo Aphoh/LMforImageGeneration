@@ -467,7 +467,7 @@ class Transformer(nn.Module):
                     else:
                         print("Rerandom the noise!")
                     
-        idx[token_all_mask.nonzero(as_tuple=True)] = self.mask_token_label  #1 -> mask token
+        idx = torch.where(token_all_mask.bool(), self.mask_token_label, idx)
         idx = idx.long()
         token_embeddings = self.tok_embedder(idx)
         
@@ -489,7 +489,7 @@ class Transformer(nn.Module):
         else:
             freqs_cis = None
             
-        mask = torch.ones((token_embeddings.shape[-2], token_embeddings.shape[-2]), dtype=torch.bool).to(device)
+        mask = mask if mask is not None else torch.ones((token_embeddings.shape[-2], token_embeddings.shape[-2]), dtype=torch.bool).to(device)
         
         # transformer blocks
         for layer in self.layers:
@@ -520,7 +520,7 @@ class Transformer(nn.Module):
     
     
     @torch.no_grad()
-    def generate_cfg(self, idx, cond, num_iter=10, temperature=1.0, top_k=None, cfg_scale=10.0, remask=False, cfg_schedule='constant', scale_pow=1.0):
+    def generate_cfg(self, idx, cond, num_iter=10, temperature=1.0, top_k=None, cfg_scale=10.0, cd_beta=0.0, cd_alpha=0.1, remask=False, cfg_schedule='constant', scale_pow=1.0):
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
         the sequence max_new_tokens times, feeding the predictions back into the model each time.
@@ -528,7 +528,10 @@ class Transformer(nn.Module):
         """
         bsz = cond.shape[-1]
         cond_null = torch.ones_like(cond) * self.num_classes
-        cond = torch.cat([cond, cond_null])
+        if cd_beta > 0.0:
+            cond = torch.cat([cond, cond, cond_null])
+        else:
+            cond = torch.cat([cond, cond_null])
         
         unknown_number_in_the_beginning = self.block_size
         _CONFIDENCE_OF_KNOWN_TOKENS = +np.inf
@@ -539,7 +542,16 @@ class Transformer(nn.Module):
         idx = initial_token_indices.to(device)
         for step in range(num_iter):
             cur_idx = idx.clone().long()
-            idx = torch.cat([cur_idx, cur_idx])
+            mask = None
+            if cd_beta > 0.0:
+                idx = torch.cat([cur_idx, cur_idx, cur_idx])
+                qlen = idx.shape[-2] + 1
+                mask = torch.ones((idx.shape[0], qlen, qlen), device=device, dtype=torch.bool)
+                mask[bsz:2*bsz] = torch.eye(qlen, device=device, dtype=torch.bool)
+                mask[bsz:2*bsz, :, 0] = True
+                mask = mask.unsqueeze(1)
+            else:
+                idx = torch.cat([cur_idx, cur_idx])
             token_all_mask = idx == self.mask_token_label
             
             # Defines the mask ratio for the next round. The number to mask out is
@@ -561,11 +573,22 @@ class Transformer(nn.Module):
                 mask_ratio = 1. - ratio
                 
             # forward the model to get the logits for the index in the sequence
-            logits, _, _ = self(idx=idx, cond=cond, token_all_mask=token_all_mask)
+            # idx: [24, 256, 1]
+            # cond: [24]
+            logits, _, _ = self(idx=idx, cond=cond, token_all_mask=token_all_mask, mask=mask)
             # pluck the logits at the final step and scale by desired temperature
             logits_combined = logits
-            cond_logits, uncond_logits = torch.split(logits_combined, len(logits_combined) // 2, dim=0) 
-            logits = uncond_logits + (cond_logits - uncond_logits) * cfg
+            if cd_beta > 0.0:
+                cond_logits, cd_logits, uncond_logits = torch.split(logits_combined, len(logits_combined) // 3, dim=0) 
+                logits = uncond_logits + (cond_logits - uncond_logits) * cfg
+                # apply beta/alpha
+                psi = cd_beta * ratio
+                cutoff = math.log(cd_alpha) + logits.max(dim=-1, keepdim=True).values
+                diffs = (1 + psi) * logits - psi * cd_logits
+                logits = diffs.masked_fill(logits < cutoff, -float('inf'))
+            else:
+                cond_logits, uncond_logits = torch.split(logits_combined, len(logits_combined) // 2, dim=0) 
+                logits = uncond_logits + (cond_logits - uncond_logits) * cfg
             
             sample_dist = torch.distributions.categorical.Categorical(logits=logits)
             sampled_ids = sample_dist.sample()

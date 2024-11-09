@@ -27,6 +27,7 @@ from time import time
 import torch.distributed as dist
 from tqdm import tqdm
 from PIL import Image
+import numpy as np
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
     """
@@ -61,6 +62,7 @@ def sample_func_autoregressive(model, bae, args, class_labels, seed=0, image_siz
     
     bs = y.shape[0]
     # Setup classifier-free guidance:
+    model.forward = torch.compile(model.forward, mode='max-autotune', fullgraph=True)
     indices, logits = model.generate_cfg(idx=None, cond=y, num_iter=args.gen_iter_num, remask=args.remask, cfg_schedule=args.cfg_schedule,
                     temperature=args.temperature, top_k=args.top_k, cfg_scale=args.cfg_scale) # bs, 16*16, 4
     
@@ -111,7 +113,6 @@ def main(args, args_ae):
         from llama.ar_model import GPT_models
     
     model = GPT_models[args.model](
-        attn_type=args.attn_type,
         use_adaLN=args.use_adaLN,
         pos_type=args.pos_type,
         token_each=args.token_each,
@@ -123,7 +124,7 @@ def main(args, args_ae):
         ffn_dropout_p=dropout_p,
         drop_path_rate=args.drop_path_rate,
         token_dropout_p=args.token_dropout_p,
-    ).to(device)
+    ).to(device, dtype=torch.bfloat16)
     print("finish model builiding")
     
     binaryae = BinaryAutoEncoder(args_ae).to(device)
@@ -249,7 +250,6 @@ if __name__ == "__main__":
     parser.add_argument("--use_adaLN", action='store_true')
     parser.add_argument("--postnorm", action="store_true")
     parser.add_argument("--norm_type", type=str, default="RMS")
-    parser.add_argument("--attn_type", type=str, default="sdp")
     parser.add_argument("--extra_info", type=str, default='')
     
     args_ae = get_vqgan_hparams(parser)

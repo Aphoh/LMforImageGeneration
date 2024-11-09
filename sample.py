@@ -34,17 +34,12 @@ def find_model(model_name):
         checkpoint = checkpoint["model"]
     return checkpoint
 
+@torch.inference_mode()
 def sample_func_autoregressive(model, bae, save, args, seed=0, image_size=256, num_classes=1000):
     # Setup PyTorch:
     torch.manual_seed(seed)
     torch.set_grad_enabled(False)
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
     device = args.device
-
-    # if ckpt is None:
-    #     assert model == "DiT-XL/2", "Only DiT-XL/2 models are available for auto-download."
-    #     assert image_size in [256, 512]
-    #     assert num_classes == 1000
 
     # # Load model:
     latent_size = image_size // 16
@@ -69,6 +64,7 @@ def sample_func_autoregressive(model, bae, save, args, seed=0, image_size=256, n
     # Setup classifier-free guidance:
     indices, logits = model.generate_cfg(idx=None, cond=y, num_iter=args.gen_iter_num,
                     temperature=args.temperature, top_k=args.top_k, cfg_scale=args.cfg_scale, remask=args.remask,
+                    cd_beta=args.cd_beta, cd_alpha=args.cd_alpha,
                     cfg_schedule=args.cfg_schedule, scale_pow=args.scale_pow) # bs, 16*16, 4
     # breakpoint()
     device = indices.device
@@ -356,7 +352,7 @@ def main(args, args_ae):
 
     else:
         for cur_num in range(args.gen_num):
-            save_path = args.save_dir + '/' + f"cfg{args.cfg_scale}{args.cfg_schedule}{args.scale_pow}_top{args.top_k}_t{args.temperature}_g{args.gen_iter_num}_{sample_index}_{cur_num}.png"
+            save_path = args.save_dir + '/' + f"cfg{args.cfg_scale}{args.cfg_schedule}{args.scale_pow}_top{args.top_k}_t{args.temperature}_beta{args.cd_beta}_alpha{args.cd_alpha}_g{args.gen_iter_num}_{sample_index}_{cur_num}.png"
             print("Saving to {}".format(save_path))
             sample_func_autoregressive(
                 model, binaryae, save_path, args,
@@ -413,6 +409,9 @@ if __name__ == "__main__":
     parser.add_argument("--gen_num", type=int, default=2)
     
     parser.add_argument("--extra_info", type=str, default="")
+
+    parser.add_argument("--cd_beta", type=float, default=0.0)
+    parser.add_argument("--cd_alpha", type=float, default=0.1)
     
     
     
